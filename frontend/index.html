@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NeuroFlow – Adaptive Learning</title>
+  <!-- WebGazer: eye tracking in the browser -->
+  <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+  <!-- Chart.js: live CFI sparkline -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f5f5f0;
+      color: #1a1a18;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    /* ── HUD: top bar showing live metrics ── */
+    #hud {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: #1a1a18;
+      color: #f5f5f0;
+      padding: 10px 24px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    #hud h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.05em; color: #a8e6cf; }
+    .metric {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+    }
+    .metric-label { font-size: 10px; opacity: 0.6; letter-spacing: 0.05em; text-transform: uppercase; }
+    .metric-value { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    #cfi-value { color: #a8e6cf; transition: color 0.4s; }
+    #cfi-value.warn  { color: #ffd180; }
+    #cfi-value.alert { color: #ff6b6b; }
+    #status-pill {
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background: #2e2e2b;
+      color: #a8e6cf;
+      transition: background 0.4s, color 0.4s;
+    }
+    #status-pill.simplifying { background: #ff6b6b33; color: #ff6b6b; }
+    #chart-wrap { flex: 1; min-width: 160px; max-width: 280px; height: 40px; }
+
+    /* ── Stress simulator (demo tool) ── */
+    #sim-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      opacity: 0.7;
+    }
+    #stress-sim { width: 100px; accent-color: #ff6b6b; }
+
+    /* ── Camera preview (WebGazer) ── */
+    #webgazerVideoContainer {
+      position: fixed !important;
+      bottom: 12px !important;
+      right: 12px !important;
+      width: 160px !important;
+      height: 120px !important;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 2px solid #a8e6cf44;
+    }
+    #webgazerFaceOverlay, #webgazerFaceFeedbackBox { display: none !important; }
+
+    /* ── Lesson content area ── */
+    main {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 32px 24px 80px;
+      width: 100%;
+    }
+    .lesson-header {
+      margin-bottom: 28px;
+    }
+    .lesson-header h2 {
+      font-size: 26px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .lesson-header p {
+      color: #555;
+      font-size: 14px;
+    }
+
+    /* ── Content sections ── */
+    .content-section {
+      background: #fff;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      border: 1px solid #e0e0d8;
+      transition: border-color 0.4s, box-shadow 0.4s;
+    }
+    .content-section.active-watch {
+      border-color: #ff6b6b88;
+      box-shadow: 0 0 0 3px #ff6b6b18;
+    }
+    .content-section h3 {
+      font-size: 17px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: #1a1a18;
+    }
+    .content-section p {
+      font-size: 15px;
+      line-height: 1.7;
+      color: #333;
+    }
+
+    /* ── Simplified (L_low) version ── */
+    .simplified-view { display: none; }
+    .simplified-view.visible {
+      display: block;
+      animation: fadeIn 0.5s ease;
+    }
+    .dense-view.hidden { display: none; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .simplified-badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background: #a8e6cf33;
+      color: #0a6646;
+      border-radius: 4px;
+      padding: 2px 7px;
+      margin-bottom: 10px;
+    }
+    .simplified-summary {
+      font-size: 16px;
+      font-weight: 600;
+      line-height: 1.5;
+      margin-bottom: 12px;
+      color: #1a1a18;
+    }
+    .simplified-bullets {
+      list-style: none;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .simplified-bullets li {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 14px;
+      line-height: 1.5;
+      color: #333;
+    }
+    .simplified-bullets li::before {
+      content: "▸";
+      color: #a8e6cf;
+      font-size: 12px;
+      margin-top: 2px;
+      flex-shrink: 0;
+    }
+    .simplified-analogy {
+      background: #f0faf6;
+      border-left: 3px solid #a8e6cf;
+      padding: 10px 14px;
+      border-radius: 0 8px 8px 0;
+      font-size: 13px;
+      color: #2a5a45;
+      margin-bottom: 12px;
+    }
+    .image-suggestion {
+      font-size: 12px;
+      color: #888;
+      margin-top: 6px;
+    }
+    .image-suggestion a {
+      color: #0a6646;
+      text-decoration: none;
+    }
+    .restore-btn {
+      font-size: 12px;
+      background: none;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 4px 10px;
+      cursor: pointer;
+      color: #666;
+      margin-top: 6px;
+    }
+    .restore-btn:hover { background: #f5f5f0; }
+
+    /* ── Loading shimmer ── */
+    .shimmer {
+      background: linear-gradient(90deg, #f0f0eb 25%, #e0e0d8 50%, #f0f0eb 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.2s infinite;
+      border-radius: 6px;
+      height: 14px;
+      margin: 6px 0;
+    }
+    @keyframes shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* ── Notification toast ── */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: #1a1a18;
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1);
+      z-index: 200;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+  </style>
+</head>
+
+<body>
+
+<!-- ── HUD ── -->
+<div id="hud">
+  <h1>⚡ NeuroFlow</h1>
+
+  <div class="metric">
+    <span class="metric-label">CFI</span>
+    <span class="metric-value" id="cfi-value">0.00</span>
+  </div>
+
+  <div class="metric">
+    <span class="metric-label">Gaze Var</span>
+    <span class="metric-value" id="gaze-value" style="font-size:14px;color:#ccc">—</span>
+  </div>
+
+  <div class="metric">
+    <span class="metric-label">Pupil Var</span>
+    <span class="metric-value" id="pupil-value" style="font-size:14px;color:#ccc">—</span>
+  </div>
+
+  <div id="chart-wrap">
+    <canvas id="cfi-chart"></canvas>
+  </div>
+
+  <span id="status-pill">Calibrating…</span>
+
+  <!-- Stress simulator: drag this to fake high CFI for demos -->
+  <div id="sim-wrap">
+    <span>Demo stress:</span>
+    <input type="range" id="stress-sim" min="0" max="100" value="0"
+           oninput="stressSimValue = this.value / 100; document.getElementById('sim-display').textContent = Math.round(this.value) + '%'">
+    <span id="sim-display">0%</span>
+  </div>
+</div>
+
+
+<!-- ── Lesson content ── -->
+<main>
+  <div class="lesson-header">
+    <h2>Introduction to Calculus: Derivatives</h2>
+    <p>Estimated read time: 8 min · Topic: Mathematics</p>
+  </div>
+
+  <!-- Section 1 -->
+  <div class="content-section" id="section-derivatives" data-section-id="derivatives">
+    <h3>What is a Derivative?</h3>
+
+    <!-- L_high: dense original content -->
+    <div class="dense-view" id="dense-derivatives">
+      <p>
+        In differential calculus, the derivative of a function of a real variable measures
+        the sensitivity to change of the function value (output value) with respect to a
+        change in its argument (input value). Formally, the derivative is defined as the
+        limit of the difference quotient as the interval approaches zero:
+        f'(x) = lim[h→0] (f(x+h) − f(x)) / h. The process of finding a derivative is
+        called differentiation. The reverse operation of differentiation is called
+        anti-differentiation or integration. Derivatives are fundamental to the solutions
+        of problems in calculus and differential equations, and have widespread application
+        in physics, engineering, economics, and biology to model rates of change such as
+        velocity and acceleration. The notation f'(x), dy/dx, and Df(x) are all used
+        interchangeably in the literature.
+      </p>
+    </div>
+
+    <!-- L_low: simplified version injected by LLM -->
+    <div class="simplified-view" id="simplified-derivatives">
+      <!-- Filled dynamically by JS -->
+    </div>
+  </div>
+
+  <!-- Section 2 -->
+  <div class="content-section" id="section-chain-rule" data-section-id="chain-rule">
+    <h3>The Chain Rule</h3>
+    <div class="dense-view" id="dense-chain-rule">
+      <p>
+        The chain rule is a formula for computing the derivative of the composition of
+        two or more functions. If f and g are functions such that h(x) = f(g(x)), the
+        chain rule states that h'(x) = f'(g(x)) · g'(x). In Leibniz notation, if
+        y = f(u) and u = g(x), then dy/dx = (dy/du) · (du/dx). This rule is essential
+        when differentiating composite functions and is one of the most powerful tools
+        in differential calculus. The chain rule generalises to multiple compositions
+        by iterative application and can be extended to multivariable calculus via
+        partial derivatives and the Jacobian matrix. Notably, the chain rule underpins
+        the backpropagation algorithm in neural networks, making it central to modern
+        machine learning.
+      </p>
+    </div>
+    <div class="simplified-view" id="simplified-chain-rule"></div>
+  </div>
+
+  <!-- Section 3 -->
+  <div class="content-section" id="section-integration" data-section-id="integration">
+    <h3>Integration as the Inverse</h3>
+    <div class="dense-view" id="dense-integration">
+      <p>
+        The Fundamental Theorem of Calculus establishes the relationship between
+        differentiation and integration, two central operations in calculus. The theorem
+        has two parts: the first part states that if F is an antiderivative of f on an
+        interval [a,b], then ∫[a to b] f(x) dx = F(b) − F(a). The second part states
+        that the derivative of an integral with variable upper bound is the original
+        integrand: d/dx ∫[a to x] f(t) dt = f(x). This duality means integration can
+        be used to compute areas under curves, total accumulation, arc lengths, volumes
+        of solids of revolution, and probability distributions in statistics. Riemann
+        sums provide the foundational construction but Lebesgue integration offers a
+        more powerful generalisation.
+      </p>
+    </div>
+    <div class="simplified-view" id="simplified-integration"></div>
+  </div>
+</main>
+
+
+<!-- Toast notification -->
+<div id="toast">🧠 Content simplified for easier reading</div>
+
+
+<script>
+/* ════════════════════════════════════════════════════
+   CONFIG
+   ════════════════════════════════════════════════════ */
+const BACKEND_URL   = 'http://localhost:5000';
+const CFI_THRESHOLD = 0.70;
+const SEND_INTERVAL = 2000;   // ms between backend calls
+const GAZE_BUFFER_SIZE = 30;  // frames of gaze history
+
+/* ════════════════════════════════════════════════════
+   STATE
+   ════════════════════════════════════════════════════ */
+let gazeBuffer     = [];
+let stressSimValue = 0;       // 0–1 from the demo slider
+let lastCFI        = 0;
+let simplifiedSections = new Set();
+let sendTimer      = null;
+
+/* ════════════════════════════════════════════════════
+   CHART  (sparkline in HUD)
+   ════════════════════════════════════════════════════ */
+const chartData = { labels: [], datasets: [{ data: [], borderColor: '#a8e6cf', borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.4 }] };
+const chart = new Chart(document.getElementById('cfi-chart'), {
+  type: 'line',
+  data: chartData,
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: {
+  legend: { display: false },
+  annotation: {  // requires chartjs-plugin-annotation if you add it
+    annotations: {
+      threshold: {
+        type: 'line',
+        yMin: 0.7, yMax: 0.7,
+        borderColor: '#ff6b6b',
+        borderWidth: 1,
+        borderDash: [4, 4],
+      }
+    }
+  }
+},
+    scales: {
+      x: { display: false },
+      y: { display: false, min: 0, max: 1 }
+    }
+  }
+});
+
+function pushChartPoint(cfi) {
+  if (chartData.labels.length > 60) {
+    chartData.labels.shift();
+    chartData.datasets[0].data.shift();
+  }
+  chartData.labels.push('');
+  chartData.datasets[0].data.push(cfi);
+  // Colour the line based on threshold
+  chartData.datasets[0].borderColor = cfi > CFI_THRESHOLD ? '#ff6b6b' : cfi > 0.45 ? '#ffd180' : '#a8e6cf';
+  chart.update('none');
+}
+
+/* ════════════════════════════════════════════════════
+   CFI COMPUTATION
+   ════════════════════════════════════════════════════ */
+function computeGazeInstability(points) {
+  if (points.length < 5) return 0;
+  const xs = points.map(p => p.x);
+  const ys = points.map(p => p.y);
+  const meanX = xs.reduce((a, b) => a + b, 0) / xs.length;
+  const meanY = ys.reduce((a, b) => a + b, 0) / ys.length;
+  const varX  = xs.reduce((a, b) => a + (b - meanX) ** 2, 0) / xs.length;
+  const varY  = ys.reduce((a, b) => a + (b - meanY) ** 2, 0) / ys.length;
+  const stdDev = Math.sqrt(varX + varY);
+  // Normalise: stable gaze ~50px stddev, very erratic ~350px
+  return Math.min(stdDev / 350, 1.0);
+}
+
+function computeCFI(gazeInstability, pupilVariance) {
+  return Math.min((gazeInstability * 0.6) + (pupilVariance * 0.4), 1.0);
+}
+
+/* ════════════════════════════════════════════════════
+   HUD UPDATE
+   ════════════════════════════════════════════════════ */
+function updateHUD(cfi, gazeInst, pupilVar) {
+  const cfiEl = document.getElementById('cfi-value');
+  cfiEl.textContent = cfi.toFixed(2);
+  cfiEl.className = 'metric-value' + (cfi > CFI_THRESHOLD ? ' alert' : cfi > 0.45 ? ' warn' : '');
+
+  document.getElementById('gaze-value').textContent = gazeInst.toFixed(2);
+  document.getElementById('pupil-value').textContent = pupilVar.toFixed(2);
+
+  const pill = document.getElementById('status-pill');
+  if (cfi > CFI_THRESHOLD) {
+    pill.textContent = '🔴 High friction';
+    pill.className = 'simplifying';
+  } else if (cfi > 0.45) {
+    pill.textContent = '🟡 Moderate';
+    pill.className = '';
+  } else {
+    pill.textContent = '🟢 Flow state';
+    pill.className = '';
+  }
+
+  pushChartPoint(cfi);
+}
+
+/* ════════════════════════════════════════════════════
+   WEBGAZER SETUP
+   ════════════════════════════════════════════════════ */
+window.onload = async function () {
+  try {
+    await webgazer
+      .setRegression('ridge')
+      .setTracker('TFFacemesh')
+      .setGazeListener(function (data, elapsedTime) {
+        if (!data) return;
+        gazeBuffer.push({ x: data.x, y: data.y });
+        if (gazeBuffer.length > GAZE_BUFFER_SIZE) gazeBuffer.shift();
+
+        const gazeInst = computeGazeInstability(gazeBuffer);
+        const pupilVar = stressSimValue;     // real pupil dilation needs specialised hardware; use slider for demo
+        const cfi      = computeCFI(gazeInst, pupilVar);
+        lastCFI        = cfi;
+        updateHUD(cfi, gazeInst, pupilVar);
+      })
+      .begin();
+
+    webgazer.showVideoPreview(true).showPredictionPoints(true);
+    document.getElementById('status-pill').textContent = 'Tracking active';
+  } catch (err) {
+    console.warn('WebGazer failed — falling back to simulation mode:', err);
+    document.getElementById('status-pill').textContent = '⚠ Sim mode (no camera)';
+    // In sim mode, just drive CFI from the stress slider
+    setInterval(() => {
+      const cfi = stressSimValue;
+      lastCFI   = cfi;
+      updateHUD(cfi, cfi * 0.8, stressSimValue);
+    }, 200);
+  }
+
+  // Poll backend every SEND_INTERVAL ms
+  sendTimer = setInterval(maybeSendCFI, SEND_INTERVAL);
+};
+
+/* ════════════════════════════════════════════════════
+   BACKEND COMMUNICATION
+   ════════════════════════════════════════════════════ */
+async function maybeSendCFI() {
+  if (lastCFI <= CFI_THRESHOLD) return;
+
+  // Find the section currently in the viewport
+  const section = getVisibleSection();
+  if (!section) return;
+  const sectionId = section.dataset.sectionId;
+  if (simplifiedSections.has(sectionId)) return;   // already simplified
+
+  const denseEl   = document.getElementById('dense-' + sectionId);
+  const denseText = denseEl ? denseEl.innerText.trim() : '';
+
+  showLoadingState(sectionId);
+
+  try {
+    const res = await fetch(`${BACKEND_URL}/cfi`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cfi: lastCFI, section_id: sectionId, content: denseText })
+    });
+
+    if (!res.ok) throw new Error(`Backend returned ${res.status}`);
+    const data = await res.json();
+
+    if (data.action === 'simplify') {
+      renderSimplified(sectionId, data.simplified);
+      simplifiedSections.add(sectionId);
+      showToast('🧠 Content simplified for easier reading');
+    } else {
+      clearLoadingState(sectionId);
+    }
+  } catch (err) {
+    console.error('Backend error:', err);
+    clearLoadingState(sectionId);
+    showToast('⚠ Backend unreachable — is Flask running?');
+  }
+}
+
+/* ════════════════════════════════════════════════════
+   CONTENT RENDERING
+   ════════════════════════════════════════════════════ */
+function renderSimplified(sectionId, simplified) {
+  const denseEl      = document.getElementById('dense-' + sectionId);
+  const simplifiedEl = document.getElementById('simplified-' + sectionId);
+  const section      = document.getElementById('section-' + sectionId);
+
+  if (!simplifiedEl) return;
+
+  // Build simplified HTML
+  const bulletHTML = (simplified.bullets || [])
+    .map(b => `<li>${escapeHtml(b)}</li>`).join('');
+
+  const imageHref = `https://www.google.com/search?q=${encodeURIComponent(simplified.image_query || sectionId)}&tbm=isch`;
+
+  simplifiedEl.innerHTML = `
+    <span class="simplified-badge">✦ Simplified</span>
+    <p class="simplified-summary">${escapeHtml(simplified.summary || '')}</p>
+    <ul class="simplified-bullets">${bulletHTML}</ul>
+    ${simplified.analogy ? `<div class="simplified-analogy">💡 ${escapeHtml(simplified.analogy)}</div>` : ''}
+    ${simplified.image_query ? `<p class="image-suggestion">🖼 Suggested visual: <a href="${imageHref}" target="_blank">${escapeHtml(simplified.image_query)}</a></p>` : ''}
+    <button class="restore-btn" onclick="restoreDense('${sectionId}')">Show original</button>
+  `;
+
+  denseEl.classList.add('hidden');
+  simplifiedEl.classList.add('visible');
+  section.classList.remove('active-watch');
+}
+
+function showLoadingState(sectionId) {
+  const section = document.getElementById('section-' + sectionId);
+  if (section) section.classList.add('active-watch');
+  const simplifiedEl = document.getElementById('simplified-' + sectionId);
+  if (simplifiedEl) {
+    simplifiedEl.innerHTML = `
+      <span class="simplified-badge">✦ Simplifying…</span>
+      <div class="shimmer" style="width:80%"></div>
+      <div class="shimmer" style="width:60%"></div>
+      <div class="shimmer" style="width:70%"></div>
+    `;
+    simplifiedEl.classList.add('visible');
+  }
+}
+
+function clearLoadingState(sectionId) {
+  const section = document.getElementById('section-' + sectionId);
+  if (section) section.classList.remove('active-watch');
+  const simplifiedEl = document.getElementById('simplified-' + sectionId);
+  if (simplifiedEl) {
+    simplifiedEl.innerHTML = '';
+    simplifiedEl.classList.remove('visible');
+  }
+}
+
+function restoreDense(sectionId) {
+  document.getElementById('dense-' + sectionId).classList.remove('hidden');
+  const simplifiedEl = document.getElementById('simplified-' + sectionId);
+  simplifiedEl.classList.remove('visible');
+  simplifiedEl.innerHTML = '';
+  simplifiedSections.delete(sectionId);
+}
+
+/* ════════════════════════════════════════════════════
+   HELPERS
+   ════════════════════════════════════════════════════ */
+function getVisibleSection() {
+  const sections = document.querySelectorAll('.content-section');
+  for (const s of sections) {
+    const rect = s.getBoundingClientRect();
+    if (rect.top < window.innerHeight * 0.7 && rect.bottom > 80) return s;
+  }
+  return null;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+</script>
+<script>
+ // Press 'S' to instantly spike CFI to 0.9 for 5 seconds (demo shortcut)
+document.addEventListener('keydown', e => {
+  if (e.key === 's' || e.key === 'S') {
+    const slider = document.getElementById('stress-sim');
+    slider.value = 90;
+    stressSimValue = 0.9;
+    document.getElementById('sim-display').textContent = '90%';
+    setTimeout(() => {
+      slider.value = 0;
+      stressSimValue = 0;
+      document.getElementById('sim-display').textContent = '0%';
+    }, 5000);
+  }
+});
+</script>
+</body>
+</html>
